@@ -1,0 +1,5 @@
+/tidy-wow
+/bin/
+*.zip
+*.log
+.DS_Store

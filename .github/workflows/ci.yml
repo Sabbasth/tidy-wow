@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Check formatting
+        run: |
+          gofmt -l . | tee /tmp/gofmt.out
+          test ! -s /tmp/gofmt.out
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Build Apple Silicon binary
+        run: GOOS=darwin GOARCH=arm64 go build ./cmd/tidy-wow
+      - name: Build Intel binary
+        run: GOOS=darwin GOARCH=amd64 go build ./cmd/tidy-wow

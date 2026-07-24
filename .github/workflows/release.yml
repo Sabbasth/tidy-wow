@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Determine release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          last_tag="$(git tag --merged HEAD --list 'v*' --sort=-v:refname | head -n 1)"
+          if [[ -z "$last_tag" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=v0.1.0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          has_source=false
+          has_tests=false
+          while IFS= read -r file; do
+            case "$file" in
+              *_test.go)
+                has_source=true
+                has_tests=true
+                ;;
+              *.go|go.mod|go.sum|Makefile)
+                has_source=true
+                ;;
+            esac
+          done < <(git diff --name-only "$last_tag"..HEAD)
+
+          if [[ "$has_source" != true ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IFS=. read -r major minor patch <<< "${last_tag#v}"
+          if [[ "$has_tests" == true ]]; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "version=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+      - name: Build release artifacts
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in arm64 amd64; do
+            name="tidy-wow_${VERSION}_darwin_${arch}"
+            GOOS=darwin GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/tidy-wow" ./cmd/tidy-wow
+            tar -C dist -czf "dist/${name}.tar.gz" tidy-wow
+          done
+          shasum -a 256 dist/*.tar.gz > dist/checksums.txt
+      - name: Publish GitHub release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "$VERSION" dist/*.tar.gz dist/checksums.txt --generate-notes --title "$VERSION"
